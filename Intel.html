@@ -2626,6 +2626,258 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
+
+// ══════════════════════════════════════════
+// MODULO AGENDA
+// ══════════════════════════════════════════
+var _agSemana = new Date();
+var _agEditId = null;
+
+function inicioSemana(d) {
+  var dt = new Date(d);
+  var dia = dt.getDay();
+  var diff = dia === 0 ? -6 : 1 - dia;
+  dt.setDate(dt.getDate() + diff);
+  dt.setHours(0,0,0,0);
+  return dt;
+}
+function semanaAnterior() { _agSemana.setDate(_agSemana.getDate()-7); renderAgenda(); }
+function proximaSemana()  { _agSemana.setDate(_agSemana.getDate()+7); renderAgenda(); }
+function semanaHoje()     { _agSemana = new Date(); renderAgenda(); }
+function fmtData(d) { return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}); }
+function fmtDataLonga(d) { return d.toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'long'}); }
+function isoDate(d) { return d.toISOString().split('T')[0]; }
+
+function preencherProcsAgenda() {
+  var sel = document.getElementById('ag-proc');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Selecione o procedimento</option>';
+  var alexGroup = document.createElement('optgroup'); alexGroup.label = 'Dr. Alex Martinelli';
+  var viviGroup = document.createElement('optgroup'); viviGroup.label = 'Viviane Costa';
+  Object.keys(TRAT_PROF).forEach(function(t) {
+    var opt = document.createElement('option'); opt.value = t; opt.textContent = t;
+    if (TRAT_PROF[t] === 'Dr. Alex Martinelli') alexGroup.appendChild(opt);
+    else viviGroup.appendChild(opt);
+  });
+  sel.appendChild(alexGroup); sel.appendChild(viviGroup);
+}
+
+function renderAgenda() {
+  var ini = inicioSemana(_agSemana);
+  var fim = new Date(ini); fim.setDate(fim.getDate()+6);
+  var el = document.getElementById('agenda-periodo');
+  if (el) el.textContent = fmtData(ini) + ' a ' + fmtData(fim) + ' de ' + fim.toLocaleDateString('pt-BR',{month:'long',year:'numeric'});
+  DB._ready(function() {
+    _db.ref('agenda').once('value', function(snap) {
+      var todos = [];
+      snap.forEach(function(c) { var ag=c.val(); ag.id=c.key; todos.push(ag); });
+      renderCalendarioAg(todos, ini);
+      renderKpisAgenda(todos, ini);
+    });
+  });
+}
+
+function renderKpisAgenda(todos, ini) {
+  var fim = new Date(ini); fim.setDate(fim.getDate()+7);
+  var semana = todos.filter(function(a) { var d=new Date(a.data+'T12:00:00'); return d>=ini&&d<fim; });
+  var conf = semana.filter(function(a){return a.status==='confirmado';}).length;
+  var real = semana.filter(function(a){return a.status==='realizado';}).length;
+  var canc = semana.filter(function(a){return a.status==='cancelado'||a.status==='faltou';}).length;
+  var el = document.getElementById('agenda-kpis');
+  if (!el) return;
+  el.innerHTML =
+    '<div class="kpi"><div class="kpi-i">'+"\uD83D\uDCC5"+'</div><div class="kpi-v">'+semana.length+'</div><div class="kpi-l">Esta semana</div></div>'+
+    '<div class="kpi"><div class="kpi-i">'+"\u2705"+'</div><div class="kpi-v">'+conf+'</div><div class="kpi-l">Confirmados</div></div>'+
+    '<div class="kpi"><div class="kpi-i">'+"\u2B50"+'</div><div class="kpi-v">'+real+'</div><div class="kpi-l">Realizados</div></div>'+
+    '<div class="kpi"><div class="kpi-i">'+"\u274C"+'</div><div class="kpi-v">'+canc+'</div><div class="kpi-l">Cancelados</div></div>';
+}
+
+function renderCalendarioAg(todos, ini) {
+  var hoje = new Date(); hoje.setHours(0,0,0,0);
+  var dias = ['Seg','Ter','Qua','Qui','Sex','Sab','Dom'];
+  var horas = ['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00'];
+  var html = '<div class="ag-week">';
+  html += '<div class="ag-head ag-time-col" style="height:52px"></div>';
+  for (var d=0;d<7;d++) {
+    var dt=new Date(ini); dt.setDate(ini.getDate()+d);
+    var isHoje = isoDate(dt)===isoDate(hoje);
+    html += '<div class="ag-head ag-head-cell'+(isHoje?' hoje':'')+'" onclick="selecionarDia(\''+isoDate(dt)+'\')">' +
+      '<div class="ag-day-nome">'+dias[d]+'</div>' +
+      '<div class="ag-day-num">'+dt.getDate()+'</div></div>';
+  }
+  horas.forEach(function(h) {
+    html += '<div class="ag-time-col"><div class="ag-time-cell">'+h+'</div></div>';
+    for (var d=0;d<7;d++) {
+      var dt=new Date(ini); dt.setDate(ini.getDate()+d);
+      var dateStr=isoDate(dt);
+      var evs=todos.filter(function(a){return a.data===dateStr&&a.hora===h;});
+      html += '<div class="ag-day-col ag-slot" onclick="clicouSlot(\''+dateStr+'\',\''+h+'\')">';
+      evs.forEach(function(ev) {
+        var cor=TRAT_CORES[ev.proc]||'#c9a84c';
+        html += '<div class="ag-event ag-status-'+(ev.status||'agendado')+'" style="background:'+cor+'30;border-left-color:'+cor+'" onclick="event.stopPropagation();editarAgenda(\''+ev.id+'\')">' +
+          '<div class="ag-event-hora">'+ev.hora+'</div>' +
+          '<div class="ag-event-pac">'+(ev.pac||'')+'</div>' +
+          '<div class="ag-event-proc">'+(ev.proc||'')+'</div></div>';
+      });
+      html += '</div>';
+    }
+  });
+  html += '</div>';
+  var el = document.getElementById('agenda-grid');
+  if (el) el.innerHTML = html;
+  var det = document.getElementById('agenda-dia-detalhe');
+  if (det) det.style.display = 'none';
+}
+
+function selecionarDia(dateStr) {
+  DB._ready(function() {
+    _db.ref('agenda').orderByChild('data').equalTo(dateStr).once('value', function(snap) {
+      var lista=[];
+      snap.forEach(function(c){var a=c.val();a.id=c.key;lista.push(a);});
+      lista.sort(function(a,b){return (a.hora||'').localeCompare(b.hora||'');});
+      var dt=new Date(dateStr+'T12:00:00');
+      var titulo = document.getElementById('agenda-dia-titulo');
+      if (titulo) { var s=fmtDataLonga(dt); titulo.textContent=s.charAt(0).toUpperCase()+s.slice(1); }
+      var listEl=document.getElementById('agenda-dia-lista');
+      if (!listEl) return;
+      if (!lista.length) {
+        listEl.innerHTML='<div style="text-align:center;padding:20px;color:var(--silver);font-size:.78rem">Nenhum agendamento neste dia.</div>';
+      } else {
+        listEl.innerHTML=lista.map(function(ag) {
+          var profClass=ag.prof==='Dr. Alex Martinelli'?'ag-prof-alex':ag.prof==='Viviane Costa'?'ag-prof-vivi':'ag-prof-ambos';
+          var cor=TRAT_CORES[ag.proc]||'#c9a84c';
+          return '<div class="ag-item" onclick="editarAgenda(\''+ag.id+'\')">' +
+            '<div style="flex-shrink:0;text-align:center"><div class="ag-item-hora">'+(ag.hora||'--')+'</div><div class="ag-item-dur">'+(ag.dur||60)+'min</div></div>'+
+            '<div style="width:4px;height:44px;border-radius:2px;background:'+cor+';flex-shrink:0"></div>'+
+            '<div class="ag-item-info"><div class="ag-item-pac">'+(ag.pac||'')+'</div>'+
+            '<div class="ag-item-proc">'+(ag.proc||'')+'</div>'+
+            '<span class="ag-item-prof '+profClass+'">'+(ag.prof||'')+'</span></div>'+
+            '<span class="ag-pill ag-pill-'+(ag.status||'agendado')+'">'+(ag.status||'agendado')+'</span></div>';
+        }).join('');
+      }
+      var det=document.getElementById('agenda-dia-detalhe');
+      if (det) det.style.display='block';
+    });
+  });
+}
+
+function clicouSlot(dateStr, hora) { abrirModalAgenda(dateStr, hora); }
+
+function abrirModalAgenda(dateStr, hora) {
+  _agEditId = null;
+  var editId = document.getElementById('agenda-edit-id');
+  if (editId) editId.value = '';
+  var title = document.getElementById('agenda-modal-title');
+  if (title) title.textContent = "\uD83D\uDCC5 Novo Agendamento";
+  var delBtn = document.getElementById('ag-del-btn');
+  if (delBtn) delBtn.style.display = 'none';
+  var fields = ['ag-pac','ag-obs'];
+  fields.forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
+  var agData = document.getElementById('ag-data');
+  if (agData) agData.value = dateStr || new Date().toISOString().split('T')[0];
+  var agHora = document.getElementById('ag-hora');
+  if (agHora) agHora.value = hora || '09:00';
+  var agDur = document.getElementById('ag-dur');
+  if (agDur) agDur.value = '60';
+  var agProc = document.getElementById('ag-proc');
+  if (agProc) agProc.value = '';
+  var agProf = document.getElementById('ag-prof');
+  if (agProf) agProf.value = 'Dr. Alex Martinelli';
+  var agStatus = document.getElementById('ag-status');
+  if (agStatus) agStatus.value = 'agendado';
+  atualizarWA();
+  DB.listar(function(lista) {
+    var dl=document.getElementById('ag-pac-list');
+    if (dl) dl.innerHTML=lista.map(function(c){return '<option value="'+(c.data.nome||'')+'">'; }).join('');
+  });
+  document.getElementById('ov-agenda').classList.add('open');
+}
+
+function editarAgenda(id) {
+  DB._ready(function() {
+    _db.ref('agenda/'+id).once('value', function(snap) {
+      var ag=snap.val(); if (!ag) return;
+      _agEditId = id;
+      var editId=document.getElementById('agenda-edit-id'); if(editId)editId.value=id;
+      var title=document.getElementById('agenda-modal-title'); if(title)title.textContent="\u270F\uFE0F Editar Agendamento";
+      var delBtn=document.getElementById('ag-del-btn'); if(delBtn)delBtn.style.display='inline-flex';
+      var f={pac:ag.pac,data:ag.data,hora:ag.hora,proc:ag.proc,prof:ag.prof,status:ag.status,obs:ag.obs};
+      Object.keys(f).forEach(function(k){var el=document.getElementById('ag-'+k);if(el)el.value=f[k]||'';});
+      var agDur=document.getElementById('ag-dur'); if(agDur)agDur.value=ag.dur||'60';
+      atualizarWA();
+      document.getElementById('ov-agenda').classList.add('open');
+    });
+  });
+}
+
+function atualizarWA() {
+  var pac  = (document.getElementById('ag-pac')||{}).value || '___';
+  var data = (document.getElementById('ag-data')||{}).value || '';
+  var hora = (document.getElementById('ag-hora')||{}).value || '___';
+  var proc = (document.getElementById('ag-proc')||{}).value || '___';
+  var prof = (document.getElementById('ag-prof')||{}).value || '';
+  var dataFmt = data ? new Date(data+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'long'}) : '___';
+  var msg = 'Ola '+pac+'! Lembramos do seu agendamento:\n\nData: '+dataFmt+'\nHorario: '+hora+'\nProcedimento: '+proc+'\nProfissional: '+prof+'\n\nPor favor confirme sua presenca respondendo este WhatsApp.\n\nClinica Dr. Alex Martinelli x Viviane Costa\nRua Dois de Dezembro, 38 - Flamengo, RJ';
+  var wamsg=document.getElementById('ag-wamsg');
+  if (wamsg) { wamsg.innerHTML=msg.replace(/\n/g,'<br>'); wamsg.dataset.msg=msg; }
+}
+
+function copiarWA() {
+  var wamsg=document.getElementById('ag-wamsg');
+  var msg=wamsg?wamsg.dataset.msg:'';
+  if (!msg) return;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(msg).then(function(){toast('Mensagem copiada! Cole no WhatsApp.');});
+  } else {
+    var ta=document.createElement('textarea'); ta.value=msg;
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+    toast('Mensagem copiada! Cole no WhatsApp.');
+  }
+}
+
+function salvarAgenda() {
+  var pac  = (document.getElementById('ag-pac')||{}).value.trim();
+  var data = (document.getElementById('ag-data')||{}).value;
+  var hora = (document.getElementById('ag-hora')||{}).value;
+  if (!pac||!data||!hora) { toast('Preencha paciente, data e horario.','err'); return; }
+  var ag = {
+    pac:pac, data:data, hora:hora,
+    dur:(document.getElementById('ag-dur')||{}).value||'60',
+    proc:(document.getElementById('ag-proc')||{}).value||'',
+    prof:(document.getElementById('ag-prof')||{}).value||'Dr. Alex Martinelli',
+    status:(document.getElementById('ag-status')||{}).value||'agendado',
+    obs:(document.getElementById('ag-obs')||{}).value||'',
+    criado:new Date().toISOString()
+  };
+  var id = _agEditId || ('ag'+Date.now());
+  DB._ready(function() {
+    _db.ref('agenda/'+id).set(ag, function(err) {
+      if (!err) { fechaModal('ov-agenda'); renderAgenda(); toast(_agEditId?'Agendamento atualizado!':'Agendamento salvo!'); }
+      else toast('Erro ao salvar.','err');
+    });
+  });
+}
+
+function deletarAgenda() {
+  var editId=document.getElementById('agenda-edit-id');
+  var id=editId?editId.value:'';
+  if (!id||!confirm('Remover este agendamento?')) return;
+  DB._ready(function() {
+    _db.ref('agenda/'+id).remove(function(err) {
+      if (!err) { fechaModal('ov-agenda'); renderAgenda(); toast('Agendamento removido.'); }
+      else toast('Erro ao remover.','err');
+    });
+  });
+}
+
+document.addEventListener('change',function(e){
+  if(['ag-pac','ag-data','ag-hora','ag-proc','ag-prof'].indexOf(e.target.id)>=0) atualizarWA();
+});
+document.addEventListener('input',function(e){
+  if(['ag-pac','ag-hora'].indexOf(e.target.id)>=0) atualizarWA();
+});
+
+
 // INIT — carrega Firebase sequencial depois inicia
 // =============================================
 renderMed();
@@ -2650,4 +2902,4 @@ loadScript(
 );
 </script>
 </body>
-</html># Cl-nica-
+</html>
